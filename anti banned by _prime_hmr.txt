@@ -1,0 +1,188 @@
+-- gay porn is really cool
+
+if _G.__antipuban_loaded then return end
+_G.__antipuban_loaded = true
+
+-- anti pub ban
+
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local LP = Players.LocalPlayer
+
+local hookmetamethodFn  = rawget(_G, "hookmetamethod")
+local hookfunctionFn    = rawget(_G, "hookfunction") or rawget(_G, "replaceclosure")
+local newcclosureFn     = rawget(_G, "newcclosure")
+local getnamecallFn     = rawget(_G, "getnamecallmethod")
+local getgcFn           = rawget(_G, "getgc")
+local getscriptsFn      = rawget(_G, "getscripts") or rawget(_G, "getloadedmodules")
+local getinfoFn         = rawget(_G, "getinfo") or (debug and debug.getinfo)
+
+local function wrap(f)
+    if type(newcclosureFn) == "function" then
+        local ok, w = pcall(newcclosureFn, f)
+        if ok then return w end
+    end
+    return f
+end
+
+local Nothing     = wrap(function() end)
+local NothingTrue = wrap(function() return true end)
+
+-- block Kick / Shutdown via namecall
+if type(hookmetamethodFn) == "function" then
+    pcall(function()
+        local old
+        old = hookmetamethodFn(game, "__namecall", wrap(function(self, ...)
+            local m = getnamecallFn and getnamecallFn() or ""
+            if m == "Kick" and typeof(self) == "Instance" then return end
+            if m == "Shutdown" and self == game then return end
+            return old(self, ...)
+        end))
+    end)
+end
+
+-- block Shutdown / Kick / Teleport via hookfunction
+if type(hookfunctionFn) == "function" then
+    pcall(function() hookfunctionFn(game.Shutdown, Nothing) end)
+    if LP then
+        pcall(function() hookfunctionFn(LP.Kick, Nothing) end)
+    end
+    pcall(function()
+        local svc = game:GetService("TeleportService")
+        hookfunctionFn(svc.Teleport, Nothing)
+    end)
+end
+
+local acScriptNames = {
+    "anti","anticheat","anti_cheat","anti-cheat","detector","detect","check",
+    "verify","watchdog","sentinel","sourceguard","client_check","clientcheck",
+    "handler","validator","guard","sanity","integrity",
+}
+
+local function looksAC(name)
+    local n = string.lower(tostring(name or ""))
+    for _, p in ipairs(acScriptNames) do
+        if string.find(n, p, 1, true) then return true end
+    end
+    return false
+end
+
+local function nukeScript(s)
+    if not s or not s.Parent then return end
+    pcall(function() s.Disabled = true end)
+    pcall(function() s:Destroy() end)
+end
+
+local function sweepAC()
+    local roots = {
+        LP and LP:FindFirstChild("PlayerScripts"),
+        game:GetService("StarterPlayer"):FindFirstChild("StarterPlayerScripts"),
+        game:GetService("ReplicatedFirst"),
+        game:GetService("ReplicatedStorage"),
+    }
+    for _, r in ipairs(roots) do
+        if r then
+            for _, d in ipairs(r:GetDescendants()) do
+                if (d:IsA("LocalScript") or d:IsA("ModuleScript")) and looksAC(d.Name) then
+                    nukeScript(d)
+                end
+            end
+        end
+    end
+    if type(getscriptsFn) == "function" then
+        local ok, pool = pcall(getscriptsFn)
+        if ok and type(pool) == "table" then
+            for _, s in ipairs(pool) do
+                if typeof(s) == "Instance" and (s:IsA("LocalScript") or s:IsA("ModuleScript")) then
+                    if looksAC(s.Name) then nukeScript(s) end
+                end
+            end
+        end
+    end
+end
+sweepAC()
+
+-- gc hook sweep
+if type(getgcFn) == "function" then
+    task.spawn(function()
+        local ok, pool = pcall(getgcFn, true)
+        if not ok or type(pool) ~= "table" then return end
+        for _, f in pairs(pool) do
+            if type(f) == "function" then
+                local okI, info = pcall(getinfoFn, f)
+                if okI and type(info) == "table" then
+                    local src = string.lower(
+                        tostring(info.source or "") .. " " ..
+                        tostring(info.name or info.short_src or "")
+                    )
+                    if src:find("anti") or src:find("detect") or src:find("kick")
+                    or src:find("ban") or src:find("sentinel") or src:find("watchdog") then
+                        if type(hookfunctionFn) == "function" then
+                            pcall(hookfunctionFn, f, Nothing)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- wipe kick/ban guis
+local function wipeKickGui(container)
+    if not container then return end
+    for _, g in ipairs(container:GetChildren()) do
+        local n = string.lower(g.Name)
+        if n:find("kick") or n:find("ban") or n:find("error") or n:find("prompt") then
+            if g:IsA("ScreenGui") or g:IsA("GuiBase2d") or g:IsA("Folder") then
+                task.spawn(function()
+                    local text = ""
+                    for _, c in ipairs(g:GetDescendants()) do
+                        if c:IsA("TextLabel") or c:IsA("TextButton") then
+                            text = text .. " " .. string.lower(c.Text or "")
+                        end
+                    end
+                    if text:find("kick") or text:find("ban") or text:find("exploit")
+                    or text:find("cheat") or text:find("detect") then
+                        pcall(function() g:Destroy() end)
+                    end
+                end)
+            end
+        end
+    end
+end
+
+pcall(function()
+    wipeKickGui(CoreGui)
+    wipeKickGui(LP and LP:FindFirstChild("PlayerGui"))
+    CoreGui.DescendantAdded:Connect(function(d)
+        if d:IsA("ScreenGui") or d:IsA("Frame") then
+            task.wait(0.05)
+            wipeKickGui(CoreGui)
+        end
+    end)
+    if LP then
+        LP.ChildAdded:Connect(function(c)
+            if c:IsA("PlayerGui") then
+                c.DescendantAdded:Connect(function()
+                    task.wait(0.05)
+                    wipeKickGui(c)
+                end)
+            end
+        end)
+        local pg = LP:FindFirstChild("PlayerGui")
+        if pg then
+            pg.DescendantAdded:Connect(function()
+                task.wait(0.05)
+                wipeKickGui(pg)
+            end)
+        end
+    end
+end)
+
+-- continuous sweep loop
+task.spawn(function()
+    while true do
+        task.wait(math.random(40, 80) / 10)
+        pcall(sweepAC)
+    end
+end)
